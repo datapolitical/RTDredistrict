@@ -1,6 +1,22 @@
 [
-  { "file": "districts_7_1.json", "label": "Compact 7 (seed 1)" },
-  { "file": "districts_7_2.json", "label": "Compact 7 (seed 2)" },
-  { "file": "districts_7_3.json", "label": "Compact 7 (seed 3)" },
-  { "file": "districts_7_4.json", "label": "Compact 7 (seed 4)" }
+  {"file":"d03_s11.json",  "label":"3 Districts (A)"},
+  {"file":"d03_s101.json", "label":"3 Districts (B)"},
+  {"file":"d05_s22.json",  "label":"5 Districts (A)"},
+  {"file":"d05_s202.json", "label":"5 Districts (B)"},
+  {"file":"d06_s33.json",  "label":"6 Districts (A)"},
+  {"file":"d06_s303.json", "label":"6 Districts (B)"},
+  {"file":"d07_s44.json",  "label":"7 Districts (A)"},
+  {"file":"d07_s404.json", "label":"7 Districts (B)"},
+  {"file":"d08_s55.json",  "label":"8 Districts (A)"},
+  {"file":"d08_s505.json", "label":"8 Districts (B)"},
+  {"file":"d09_s66.json",  "label":"9 Districts (A)"},
+  {"file":"d09_s606.json", "label":"9 Districts (B)"},
+  {"file":"d10_s77.json",  "label":"10 Districts (A)"},
+  {"file":"d10_s707.json", "label":"10 Districts (B)"},
+  {"file":"d11_s88.json",  "label":"11 Districts (A)"},
+  {"file":"d11_s808.json", "label":"11 Districts (B)"},
+  {"file":"d13_s99.json",  "label":"13 Districts (A)"},
+  {"file":"d13_s909.json", "label":"13 Districts (B)"},
+  {"file":"d15_s10.json",  "label":"15 Districts (A)"},
+  {"file":"d15_s111.json", "label":"15 Districts (B)"}
 ]

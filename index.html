@@ -7,19 +7,17 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+  <script src="vendor/topojson-client.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; font-size: 14px; background: #f5f5f5; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
-    /* Header */
     #header { background: #1a3a5c; color: #fff; padding: 10px 16px; display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
     #header h1 { font-size: 16px; font-weight: 600; letter-spacing: .3px; }
     #header .subtitle { font-size: 12px; opacity: .7; }
 
-    /* Main layout */
     #main { display: flex; flex: 1; overflow: hidden; }
 
-    /* Sidebar */
     #sidebar { width: 300px; flex-shrink: 0; background: #fff; border-right: 1px solid #ddd; display: flex; flex-direction: column; overflow: hidden; }
     #sidebar-inner { overflow-y: auto; padding: 12px; flex: 1; }
 
@@ -31,7 +29,6 @@
 
     #map-description { font-size: 12px; color: #555; margin-top: 6px; min-height: 16px; font-style: italic; }
 
-    /* Stats table */
     #stats-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
     #stats-table th { background: #f0f0f0; padding: 4px 6px; text-align: left; font-weight: 600; border-bottom: 1px solid #ccc; }
     #stats-table td { padding: 3px 6px; border-bottom: 1px solid #eee; }
@@ -40,18 +37,24 @@
     .ok   { color: #2a7a2a; font-weight: 600; }
     .warn { color: #c07000; font-weight: 600; }
     .bad  { color: #b00020; font-weight: 600; }
-    .minority-star { color: #8a2be2; font-weight: 700; margin-left: 3px; title: "Minority opportunity district"; }
+    .minority-star { color: #8a2be2; font-weight: 700; margin-left: 3px; }
 
-    /* Summary badges */
     #summary-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
     .badge { padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
     .badge-ok   { background: #d4edda; color: #155724; }
     .badge-warn { background: #fff3cd; color: #856404; }
     .badge-bad  { background: #f8d7da; color: #721c24; }
 
-    /* Map container */
-    #map-container { flex: 1; position: relative; }
-    #map { width: 100%; height: 100%; }
+    /* Layer toggle */
+    .toggle-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: #444; cursor: pointer; }
+    .toggle-row input { cursor: pointer; }
+
+    /* Map panels */
+    #maps { display: flex; flex: 1; overflow: hidden; }
+    .map-panel { flex: 1; position: relative; }
+    .map-panel + .map-panel { border-left: 2px solid #ccc; }
+    .map-label { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 500; background: rgba(255,255,255,.88); padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 700; color: #333; pointer-events: none; white-space: nowrap; }
+    .map-inner { width: 100%; height: 100%; }
 
     /* Loading overlay */
     #loading { position: absolute; inset: 0; background: rgba(255,255,255,.85); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1000; gap: 12px; }
@@ -59,7 +62,6 @@
     #loading .msg { color: #444; font-size: 13px; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Comparison panel */
     #comparison { flex-shrink: 0; background: #fff; border-top: 1px solid #ddd; padding: 10px 14px; }
     #comparison-header { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
     #comparison-header h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: #555; flex: 1; }
@@ -73,8 +75,10 @@
     .cmp-table th { background: #f0f0f0; padding: 3px 5px; text-align: left; font-weight: 600; border-bottom: 1px solid #ccc; }
     .cmp-table td { padding: 2px 5px; border-bottom: 1px solid #eee; }
 
-    /* Error message */
     #error-msg { display: none; padding: 10px 14px; background: #f8d7da; color: #721c24; font-size: 12px; border-top: 1px solid #f5c6cb; }
+
+    /* Tooltip */
+    .leaflet-tooltip { font-size: 12px; line-height: 1.5; }
   </style>
 </head>
 <body>
@@ -87,7 +91,6 @@
 </div>
 
 <div id="main">
-  <!-- Sidebar -->
   <div id="sidebar">
     <div id="sidebar-inner">
 
@@ -96,6 +99,16 @@
         <option value="">Loading maps...</option>
       </select>
       <div id="map-description"></div>
+
+      <div class="section-title">Layers</div>
+      <label class="toggle-row">
+        <input type="checkbox" id="toggle-munis" checked>
+        Municipality boundaries
+      </label>
+      <label class="toggle-row">
+        <input type="checkbox" id="toggle-precincts">
+        Precinct boundaries
+      </label>
 
       <div class="section-title">Summary</div>
       <div id="summary-badges"><span style="color:#aaa;font-size:12px">No map loaded</span></div>
@@ -119,17 +132,22 @@
     </div>
   </div>
 
-  <!-- Map -->
-  <div id="map-container">
-    <div id="map"></div>
-    <div id="loading">
-      <div class="spinner"></div>
-      <div class="msg" id="loading-msg">Loading precinct data...</div>
+  <div id="maps">
+    <div class="map-panel" id="panel-proposed">
+      <div class="map-label">Proposed</div>
+      <div class="map-inner" id="map-proposed"></div>
+      <div id="loading">
+        <div class="spinner"></div>
+        <div class="msg" id="loading-msg">Loading data...</div>
+      </div>
+    </div>
+    <div class="map-panel" id="panel-current">
+      <div class="map-label">Current: 15-Director RTD Map</div>
+      <div class="map-inner" id="map-current"></div>
     </div>
   </div>
 </div>
 
-<!-- Comparison panel -->
 <div id="comparison">
   <div id="comparison-header" onclick="toggleComparison()">
     <h3>Comparison Panel</h3>
@@ -164,128 +182,295 @@ const COLORS = [
   '#a65628','#f781bf','#999999','#66c2a5','#fc8d62',
   '#8da0cb','#e78ac3','#a6d854','#ffd92f','#b3b3b3'
 ];
+// Colors for the 15 current director districts (A–O)
+const DIR_COLORS = {
+  A:'#1b9e77',B:'#d95f02',C:'#7570b3',D:'#e7298a',E:'#66a61e',
+  F:'#e6ab02',G:'#a6761d',H:'#666666',I:'#a6cee3',J:'#1f78b4',
+  K:'#b2df8a',L:'#33a02c',M:'#fb9a99',N:'#e31a1c',O:'#fdbf6f'
+};
 const UNALLOCATED_COLOR = '#cccccc';
 const MINORITY_THRESHOLD = 0.45;
-const POP_WARN = 0.05;   // 5% deviation threshold
+const POP_WARN = 0.05;
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let precomputed = null;   // { precincts[], adjacency[] }
-let geojsonData = null;   // raw GeoJSON FeatureCollection
-let geojsonLayer = null;  // Leaflet layer
-let staticMaps   = [];    // index.json entries
+let precomputed        = null;
+let staticMaps         = [];
 let currentAssignments = null;
 let currentNDistricts  = 0;
-let districtLayer = null;
-let map;
+let districtLayer      = null;   // proposed map dissolved district fills
+let geojsonLayerP      = null;   // invisible hover layer on proposed map
+let precinctsGeoJSON   = null;   // precinct FeatureCollection for dissolve
+let muniLayerP         = null;   // municipality layer on proposed map
+let muniLayerC         = null;   // municipality layer on current map
+let precLayerP         = null;   // precinct overlay on proposed map
+let precLayerC         = null;   // precinct overlay on current map
+let topoData           = null;   // loaded TopoJSON (null if not available)
+let rtdBoundary        = null;   // rtd_boundary GeoJSON
+let mapP, mapC;                  // Leaflet map instances
 
-// ── Init Leaflet ──────────────────────────────────────────────────────────────
-map = L.map('map', { zoomControl: true, preferCanvas: true }).setView([39.75, -104.95], 10);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-  attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
-  maxZoom: 19
-}).addTo(map);
+// ── Init Leaflet maps ─────────────────────────────────────────────────────────
+const TILE_URL = 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png';
+const TILE_OPT = { attribution: '&copy; OpenStreetMap contributors &copy; CARTO', maxZoom: 19 };
 
-// ── Load data ─────────────────────────────────────────────────────────────────
+mapP = L.map('map-proposed', { zoomControl: true,  preferCanvas: true }).setView([39.75, -104.95], 10);
+mapC = L.map('map-current',  { zoomControl: false, preferCanvas: true }).setView([39.75, -104.95], 10);
+
+L.tileLayer(TILE_URL, TILE_OPT).addTo(mapP);
+L.tileLayer(TILE_URL, TILE_OPT).addTo(mapC);
+
+// Keep maps in sync
+let syncing = false;
+function syncMaps(source, target) {
+  source.on('moveend', () => {
+    if (syncing) return;
+    syncing = true;
+    target.setView(source.getCenter(), source.getZoom(), { animate: false });
+    syncing = false;
+  });
+}
+syncMaps(mapP, mapC);
+syncMaps(mapC, mapP);
+
+// ── Load all data ─────────────────────────────────────────────────────────────
 async function loadAll() {
-  setLoading('Loading precinct index...');
+  setLoading('Loading data...');
   try {
-    const [pcRes, gjRes, idxRes] = await Promise.all([
+    const [pcRes, idxRes, rtdRes, muniRes, dirRes] = await Promise.all([
       fetch('rtd_data/precomputed.json'),
-      fetch('rtd_data/precincts.geojson'),
-      fetch('static_maps/index.json')
+      fetch('static_maps/index.json'),
+      fetch('rtd_data/rtd_boundary.geojson'),
+      fetch('rtd_data/municipalities.geojson'),
+      fetch('DirectorDistricts.geojson'),
     ]);
     if (!pcRes.ok)  throw new Error('Could not load rtd_data/precomputed.json');
-    if (!gjRes.ok)  throw new Error('Could not load rtd_data/precincts.geojson');
     if (!idxRes.ok) throw new Error('Could not load static_maps/index.json');
+    if (!rtdRes.ok) throw new Error('Could not load rtd_data/rtd_boundary.geojson');
 
     setLoading('Parsing data...');
-    [precomputed, geojsonData, staticMaps] = await Promise.all([
-      pcRes.json(), gjRes.json(), idxRes.json()
+    [precomputed, staticMaps, rtdBoundary] = await Promise.all([
+      pcRes.json(), idxRes.json(), rtdRes.json()
     ]);
+    const muniData = muniRes.ok ? await muniRes.json() : null;
+    const dirData  = dirRes.ok  ? await dirRes.json()  : null;
 
-    setLoading('Rendering map...');
-    // Small delay so the browser can paint the loading message
-    await new Promise(r => setTimeout(r, 50));
+    setLoading('Loading precinct boundaries...');
+    await new Promise(r => setTimeout(r, 20));
 
-    buildGeojsonLayer();
+    // Load precinct geometry for dissolve (TopoJSON preferred, GeoJSON fallback)
+    const topoRes = await fetch('rtd_data/precincts.topo.json').catch(() => null);
+    if (topoRes && topoRes.ok) {
+      topoData = await topoRes.json();
+      precinctsGeoJSON = topojson.feature(topoData, topoData.objects.precincts);
+    } else {
+      setLoading('Loading precinct GeoJSON...');
+      const pgRes = await fetch('rtd_data/precincts.geojson');
+      if (!pgRes.ok) throw new Error('Could not load precinct geometry');
+      precinctsGeoJSON = await pgRes.json();
+    }
+    // Tag each feature with its index for hover lookup
+    precinctsGeoJSON.features.forEach((f, i) => { f.properties._idx = i; });
+
+    // Invisible hover layer on proposed map
+    geojsonLayerP = L.geoJSON(precinctsGeoJSON, {
+      style: { weight: 0, fillOpacity: 0, fillColor: 'transparent' },
+      onEachFeature: (feature, layer) => {
+        const idx = feature.properties._idx;
+        layer.on('mouseover', e => showTooltipAt(layer, idx, e.latlng));
+        layer.on('mouseout',  () => layer.closeTooltip());
+      }
+    }).addTo(mapP);
+
+    addInverseMask(mapP);
+    addInverseMask(mapC);
+    addRtdOutline(mapP);
+    addRtdOutline(mapC);
+    if (muniData) {
+      muniLayerP = buildMuniLayer(muniData).addTo(mapP);
+      muniLayerC = buildMuniLayer(muniData).addTo(mapC);
+    }
+    if (dirData) buildCurrentDistrictMap(dirData);
+    setupPrecinctsToggle();
+    setupMuniToggle();
+
+    const bounds = L.geoJSON(rtdBoundary).getBounds();
+    mapP.fitBounds(bounds);
+    mapC.fitBounds(bounds);
+
     populateDropdowns();
     hideLoading();
   } catch (err) {
-    showError(err.message +
-      '\n\nServe this folder with a local HTTP server, e.g.:\n  python3 -m http.server 8080\nthen open http://localhost:8080');
+    showError(err.message);
   }
 }
 
-// ── Build Leaflet GeoJSON layer ───────────────────────────────────────────────
-function buildGeojsonLayer() {
-  // Attach index to each feature for fast lookup
-  geojsonData.features.forEach((f, i) => { f._idx = i; });
-
-  geojsonLayer = L.geoJSON(geojsonData, {
-    style: defaultStyle,
-    onEachFeature: (feature, layer) => {
-      const idx = feature._idx;
-      layer.on('mouseover', () => highlightFeature(layer, idx));
-      layer.on('mouseout',  () => resetHighlight(layer, idx));
-      layer.bindTooltip(() => tooltipContent(idx), { sticky: true, opacity: .9 });
-    }
-  }).addTo(map);
-  map.fitBounds(geojsonLayer.getBounds());
-}
-
-function featureIndex(feature) {
-  // Features are in the same order as precomputed.precincts
-  // We rely on feature index via geojsonData.features.indexOf being slow,
-  // so we attach idx during first pass
-  return feature._idx;
-}
-
-function defaultStyle() {
-  return { weight: .3, color: '#555', opacity: .5, fillOpacity: .65, fillColor: UNALLOCATED_COLOR };
-}
-
-function districtStyle(idx) {
-  if (!currentAssignments) return defaultStyle();
-  const d = currentAssignments[idx];
-  const color = d < 0 ? UNALLOCATED_COLOR : (COLORS[d] || UNALLOCATED_COLOR);
-  return { weight: 1.5, color: color, opacity: 1, fillOpacity: .75, fillColor: color };
-}
-
-function highlightFeature(layer, idx) {
-  const d = currentAssignments ? currentAssignments[idx] : -1;
-  const color = (d < 0) ? UNALLOCATED_COLOR : (COLORS[d] || UNALLOCATED_COLOR);
-  layer.setStyle({ weight: 2, color: '#222', opacity: 1, fillColor: color, fillOpacity: 0.9 });
-  layer.bringToFront();
-}
-
-function resetHighlight(layer, idx) {
-  layer.setStyle(currentAssignments ? { weight: 0, fillOpacity: 0 } : defaultStyle());
-}
-
-function tooltipContent(idx) {
-  if (idx == null || !precomputed) return '';
+function showTooltipAt(layer, idx, latlng) {
   const p = precomputed.precincts[idx];
   const d = currentAssignments ? currentAssignments[idx] : -1;
   const distLabel = d < 0 ? 'Unallocated' : `District ${d + 1}`;
   const minPct = p.pop > 0
-    ? ((p.nh_black + p.hispanic + p.nh_asian) / p.pop * 100).toFixed(1)
-    : '0.0';
-  return `<b>${distLabel}</b><br>
-    GEOID: ${p.geoid}<br>
+    ? ((p.nh_black + p.hispanic + p.nh_asian) / p.pop * 100).toFixed(1) : '0.0';
+  layer.bindTooltip(`<b>${distLabel}</b><br>
+    Precinct: ${idx + 1}<br>
     Population: ${p.pop.toLocaleString()}<br>
     Hispanic: ${(p.pct_hispanic * 100).toFixed(1)}%<br>
     Black: ${(p.pct_black * 100).toFixed(1)}%<br>
     Asian: ${(p.pct_asian * 100).toFixed(1)}%<br>
-    Minority: ${minPct}%`;
+    Minority: ${minPct}%`, { sticky: true, opacity: 0.9 }).openTooltip(latlng);
 }
 
-// ── Populate dropdowns ────────────────────────────────────────────────────────
+// ── Inverse mask ──────────────────────────────────────────────────────────────
+function rtdUnion() {
+  const feats = rtdBoundary.features;
+  return feats.length === 1 ? feats[0] : feats.reduce((a, b) => turf.union(a, b));
+}
+
+function addInverseMask(map) {
+  const mask = turf.mask(rtdUnion());
+  L.geoJSON(mask, {
+    style: { weight: 0, fillColor: '#f0ece4', fillOpacity: 0.82 }
+  }).addTo(map);
+}
+
+// ── RTD boundary outline ──────────────────────────────────────────────────────
+let rtdOutlineP = null;
+let rtdOutlineC = null;
+
+function addRtdOutline(map) {
+  const layer = L.geoJSON(rtdBoundary, {
+    style: { weight: 2, color: '#000', opacity: 0.85, fill: false }
+  }).addTo(map);
+  if (map === mapP) rtdOutlineP = layer;
+  else rtdOutlineC = layer;
+}
+
+// ── Municipality boundaries ───────────────────────────────────────────────────
+function buildMuniLayer(muniData) {
+  return L.geoJSON(muniData, {
+    style: { weight: 0.8, color: '#1a3a5c', opacity: 0.18, fill: false }
+  });
+}
+
+// ── Current 15-director district map ─────────────────────────────────────────
+function dropSmallDistrictParts(feature, minAreaDeg2 = 1e-5) {
+  const geom = feature.geometry;
+  if (geom.type !== 'MultiPolygon') return feature;
+  const parts = geom.coordinates.filter(ring => {
+    const poly = turf.polygon(ring);
+    return turf.area(poly) > minAreaDeg2 * 1e10; // rough sq-meters threshold
+  });
+  if (parts.length === 0) return feature;
+  if (parts.length === 1) return { ...feature, geometry: { type: 'Polygon', coordinates: parts[0] } };
+  return { ...feature, geometry: { ...geom, coordinates: parts } };
+}
+
+function buildCurrentDistrictMap(dirData) {
+  const cleaned = {
+    ...dirData,
+    features: dirData.features.map(dropSmallDistrictParts)
+  };
+  L.geoJSON(cleaned, {
+    style: feature => {
+      const bnd = feature.properties.BND || '';
+      return {
+        weight: 1, color: '#fff', opacity: 0.6,
+        fillColor: DIR_COLORS[bnd] || '#aaa', fillOpacity: 0.7
+      };
+    },
+    onEachFeature: (feature, layer) => {
+      const bnd = feature.properties.BND || '?';
+      layer.bindTooltip(`<b>District ${bnd}</b>`, { sticky: true, opacity: 0.9 });
+    }
+  }).addTo(mapC);
+
+  addInverseMask(mapC);
+  addRtdOutline(mapC);
+}
+
+// ── Precinct boundary overlay ─────────────────────────────────────────────────
+function buildPrecinctsLayer(map) {
+  if (!precinctsGeoJSON) return null;
+  return L.geoJSON(precinctsGeoJSON, {
+    style: { weight: 0.5, color: '#fff', opacity: 0.5, fill: false },
+    onEachFeature: (feature, layer) => {
+      const idx = feature.properties._idx;
+      layer.on('mouseover', e => showTooltipAt(layer, idx, e.latlng));
+      layer.on('mouseout',  () => layer.closeTooltip());
+    }
+  }).addTo(map);
+}
+
+function setupPrecinctsToggle() {
+  document.getElementById('toggle-precincts').addEventListener('change', e => {
+    if (e.target.checked) {
+      if (!precinctsGeoJSON) {
+        e.target.checked = false;
+        alert('No precinct geometry loaded');
+        return;
+      }
+      precLayerP = buildPrecinctsLayer(mapP);
+      precLayerC = buildPrecinctsLayer(mapC);
+    } else {
+      if (precLayerP) { mapP.removeLayer(precLayerP); precLayerP = null; }
+      if (precLayerC) { mapC.removeLayer(precLayerC); precLayerC = null; }
+    }
+  });
+}
+
+function setupMuniToggle() {
+  document.getElementById('toggle-munis').addEventListener('change', e => {
+    if (e.target.checked) {
+      if (muniLayerP) muniLayerP.addTo(mapP);
+      if (muniLayerC) muniLayerC.addTo(mapC);
+    } else {
+      if (muniLayerP) mapP.removeLayer(muniLayerP);
+      if (muniLayerC) mapC.removeLayer(muniLayerC);
+    }
+  });
+}
+
+// ── Apply static map ──────────────────────────────────────────────────────────
+function applyMap(data) {
+  currentAssignments = data.assignments;
+  currentNDistricts  = data.nDistricts;
+  document.getElementById('map-description').textContent = data.description || '';
+
+  if (districtLayer) { mapP.removeLayer(districtLayer); districtLayer = null; }
+
+  // Tag each precinct feature with its district assignment; skip null geometries
+  const features = [];
+  precinctsGeoJSON.features.forEach((f, i) => {
+    if (f.geometry && f.geometry.type && f.geometry.coordinates) {
+      features.push({ ...f, properties: { _district: data.assignments[i] } });
+    }
+  });
+  const fc = { type: 'FeatureCollection', features };
+
+  const dissolved = turf.simplify(
+    turf.dissolve(turf.flatten(fc), { propertyName: '_district' }),
+    { tolerance: 0.002, highQuality: false }
+  );
+
+  districtLayer = L.geoJSON(dissolved, {
+    style: feature => {
+      const d = feature.properties._district;
+      const color = (d == null || d < 0) ? UNALLOCATED_COLOR : (COLORS[d] || UNALLOCATED_COLOR);
+      return { weight: 1.5, color: '#fff', opacity: 0.7, fillOpacity: 0.75, fillColor: color };
+    }
+  }).addTo(mapP);
+
+  if (geojsonLayerP) geojsonLayerP.bringToFront();
+  if (rtdOutlineP) rtdOutlineP.bringToFront();
+
+  renderStats(data);
+}
+
+// ── Dropdowns ─────────────────────────────────────────────────────────────────
 function populateDropdowns() {
-  const sel = document.getElementById('map-select');
+  const sel  = document.getElementById('map-select');
   const cmpA = document.getElementById('cmp-a-select');
   const cmpB = document.getElementById('cmp-b-select');
 
-  sel.innerHTML = '<option value="">— select a map —</option>';
+  sel.innerHTML  = '<option value="">— select a map —</option>';
   cmpA.innerHTML = '<option value="">— select —</option>';
   cmpB.innerHTML = '<option value="">— select —</option>';
 
@@ -306,7 +491,6 @@ function populateDropdowns() {
   sel.addEventListener('change', () => loadStaticMap(sel.value));
 }
 
-// ── Load a static map file ────────────────────────────────────────────────────
 async function loadStaticMap(idx) {
   if (idx === '') return;
   const entry = staticMaps[parseInt(idx)];
@@ -314,8 +498,7 @@ async function loadStaticMap(idx) {
   try {
     const res = await fetch(`static_maps/${entry.file}`);
     if (!res.ok) throw new Error(`Could not load static_maps/${entry.file}`);
-    const data = await res.json();
-    applyMap(data);
+    applyMap(await res.json());
     hideLoading();
   } catch (err) {
     hideLoading();
@@ -323,48 +506,12 @@ async function loadStaticMap(idx) {
   }
 }
 
-function applyMap(data) {
-  currentAssignments = data.assignments;
-  currentNDistricts  = data.nDistricts;
-
-  document.getElementById('map-description').textContent = data.description || '';
-
-  // Make precinct layer invisible — kept only for tooltips/hover
-  geojsonLayer.setStyle(() => ({ weight: 0, fillOpacity: 0 }));
-
-  // Dissolve precincts into per-district polygons (no internal seams)
-  if (districtLayer) { map.removeLayer(districtLayer); districtLayer = null; }
-
-  const fc = {
-    type: 'FeatureCollection',
-    features: geojsonData.features.map((f, i) => ({
-      ...f,
-      properties: { _district: data.assignments[i] }
-    }))
-  };
-  const dissolved = turf.simplify(
-    turf.dissolve(turf.flatten(fc), { propertyName: '_district' }),
-    { tolerance: 0.002, highQuality: false }
-  );
-
-  districtLayer = L.geoJSON(dissolved, {
-    style: (feature) => {
-      const d = feature.properties._district;
-      const color = (d == null || d < 0) ? UNALLOCATED_COLOR : (COLORS[d] || UNALLOCATED_COLOR);
-      return { weight: 0, fillOpacity: 0.75, fillColor: color };
-    }
-  }).addTo(map);
-
-  geojsonLayer.bringToFront();
-  renderStats(data);
-}
-
-// ── Compute statistics ────────────────────────────────────────────────────────
+// ── Stats ──────────────────────────────────────────────────────────────────────
 function computeStats(assignments, nDistricts) {
-  const precincts  = precomputed.precincts;
-  const adjacency  = precomputed.adjacency;
-  const totalPop   = precincts.reduce((s, p) => s + p.pop, 0);
-  const ideal      = totalPop / nDistricts;
+  const precincts = precomputed.precincts;
+  const adjacency = precomputed.adjacency;
+  const totalPop  = precincts.reduce((s, p) => s + p.pop, 0);
+  const ideal     = totalPop / nDistricts;
 
   const distPop      = new Array(nDistricts).fill(0);
   const distMinority = new Array(nDistricts).fill(0);
@@ -376,10 +523,9 @@ function computeStats(assignments, nDistricts) {
     distMinority[d] += p.nh_black + p.hispanic + p.nh_asian;
   });
 
-  const popDev     = distPop.map(pop => Math.abs(pop - ideal) / ideal);
-  const minPct     = distPop.map((pop, d) => pop > 0 ? distMinority[d] / pop : 0);
+  const popDev = distPop.map(pop => Math.abs(pop - ideal) / ideal);
+  const minPct = distPop.map((pop, d) => pop > 0 ? distMinority[d] / pop : 0);
 
-  // Contiguity: BFS per district using adjacency list
   const contiguous = new Array(nDistricts).fill(true);
   for (let d = 0; d < nDistricts; d++) {
     const members = [];
@@ -401,12 +547,10 @@ function computeStats(assignments, nDistricts) {
   return { distPop, popDev, minPct, contiguous, totalPop, ideal };
 }
 
-// ── Render stats panel ────────────────────────────────────────────────────────
 function renderStats(data) {
   const { assignments, nDistricts } = data;
   const stats = computeStats(assignments, nDistricts);
 
-  // Summary badges
   const maxDev   = Math.max(...stats.popDev);
   const allCont  = stats.contiguous.every(Boolean);
   const hasMinor = stats.minPct.some(p => p >= MINORITY_THRESHOLD);
@@ -414,33 +558,27 @@ function renderStats(data) {
 
   const badges = document.getElementById('summary-badges');
   badges.innerHTML = '';
-  const devClass  = maxDev <= POP_WARN ? 'badge-ok' : (maxDev <= .10 ? 'badge-warn' : 'badge-bad');
-  badges.insertAdjacentHTML('beforeend',
-    `<span class="badge ${devClass}">Max dev: ${(maxDev * 100).toFixed(1)}%</span>`);
-  badges.insertAdjacentHTML('beforeend',
-    `<span class="badge ${allCont ? 'badge-ok' : 'badge-bad'}">${allCont ? 'Contiguous' : 'Non-contiguous'}</span>`);
-  badges.insertAdjacentHTML('beforeend',
-    `<span class="badge ${hasMinor ? 'badge-ok' : 'badge-warn'}">${hasMinor ? 'Minority opp.' : 'No minority opp.'}</span>`);
-  if (unalloc > 0)
-    badges.insertAdjacentHTML('beforeend',
-      `<span class="badge badge-warn">${unalloc} unallocated</span>`);
+  const devClass = maxDev <= POP_WARN ? 'badge-ok' : (maxDev <= .10 ? 'badge-warn' : 'badge-bad');
+  badges.insertAdjacentHTML('beforeend', `<span class="badge ${devClass}">Max dev: ${(maxDev*100).toFixed(1)}%</span>`);
+  badges.insertAdjacentHTML('beforeend', `<span class="badge ${allCont ? 'badge-ok' : 'badge-bad'}">${allCont ? 'Contiguous' : 'Non-contiguous'}</span>`);
+  badges.insertAdjacentHTML('beforeend', `<span class="badge ${hasMinor ? 'badge-ok' : 'badge-warn'}">${hasMinor ? 'Minority opp.' : 'No minority opp.'}</span>`);
+  if (unalloc > 0) badges.insertAdjacentHTML('beforeend', `<span class="badge badge-warn">${unalloc} unallocated</span>`);
 
-  // Stats table
   const tbody = document.getElementById('stats-body');
   tbody.innerHTML = '';
   for (let d = 0; d < nDistricts; d++) {
-    const color   = COLORS[d] || '#ccc';
-    const devPct  = (stats.popDev[d] * 100).toFixed(1);
-    const devCls  = stats.popDev[d] <= POP_WARN ? 'ok' : (stats.popDev[d] <= .10 ? 'warn' : 'bad');
-    const minPct  = (stats.minPct[d] * 100).toFixed(1);
-    const isMinor = stats.minPct[d] >= MINORITY_THRESHOLD;
+    const color    = COLORS[d] || '#ccc';
+    const devPct   = (stats.popDev[d] * 100).toFixed(1);
+    const devCls   = stats.popDev[d] <= POP_WARN ? 'ok' : (stats.popDev[d] <= .10 ? 'warn' : 'bad');
+    const minPct   = (stats.minPct[d] * 100).toFixed(1);
+    const isMinor  = stats.minPct[d] >= MINORITY_THRESHOLD;
     const contIcon = stats.contiguous[d] ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>';
     tbody.insertAdjacentHTML('beforeend', `
       <tr>
         <td><span class="swatch" style="background:${color}"></span>${d + 1}</td>
         <td>${stats.distPop[d].toLocaleString()}</td>
         <td class="${devCls}">${devPct}%</td>
-        <td>${minPct}%${isMinor ? '<span class="minority-star" title="Minority opportunity district">★</span>' : ''}</td>
+        <td>${minPct}%${isMinor ? '<span class="minority-star">★</span>' : ''}</td>
         <td>${contIcon}</td>
       </tr>`);
   }
@@ -468,10 +606,9 @@ async function updateComparison(side) {
   let data = cmpCache[entry.file];
   if (!data) {
     try {
-      const res = await fetch(`static_maps/${entry.file}`);
-      data = await res.json();
+      data = await fetch(`static_maps/${entry.file}`).then(r => r.json());
       cmpCache[entry.file] = data;
-    } catch (e) {
+    } catch {
       body.innerHTML = `<tr><td colspan="5" style="color:red">Error loading</td></tr>`;
       return;
     }
@@ -480,9 +617,9 @@ async function updateComparison(side) {
   const stats = computeStats(data.assignments, data.nDistricts);
   body.innerHTML = '';
   for (let d = 0; d < data.nDistricts; d++) {
-    const devPct = (stats.popDev[d] * 100).toFixed(1);
-    const devCls = stats.popDev[d] <= POP_WARN ? 'ok' : (stats.popDev[d] <= .10 ? 'warn' : 'bad');
-    const minPct = (stats.minPct[d] * 100).toFixed(1);
+    const devPct   = (stats.popDev[d] * 100).toFixed(1);
+    const devCls   = stats.popDev[d] <= POP_WARN ? 'ok' : (stats.popDev[d] <= .10 ? 'warn' : 'bad');
+    const minPct   = (stats.minPct[d] * 100).toFixed(1);
     const contIcon = stats.contiguous[d] ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>';
     const color = COLORS[d] || '#ccc';
     body.insertAdjacentHTML('beforeend', `
@@ -496,7 +633,7 @@ async function updateComparison(side) {
   }
 }
 
-// ── Loading / error helpers ───────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function setLoading(msg) {
   document.getElementById('loading').style.display = 'flex';
   document.getElementById('loading-msg').textContent = msg;
@@ -513,11 +650,7 @@ function showError(msg) {
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-// Attach feature indices before layer build
-window.addEventListener('DOMContentLoaded', async () => {
-  await loadAll();
-  // After geojsonData is loaded, indices are attached in buildGeojsonLayer
-});
+window.addEventListener('DOMContentLoaded', loadAll);
 </script>
 </body>
 </html>

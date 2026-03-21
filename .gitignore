@@ -1,4 +1,7 @@
 .DS_Store
+*.zip
+/precomputed.json
+/precincts.topo.json
 
 # Raw / intermediate source data not needed to run the app
 co_2024_gen_prec.zip
