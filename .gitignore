@@ -1,0 +1,10 @@
+.DS_Store
+
+# Raw / intermediate source data not needed to run the app
+co_2024_gen_prec.zip
+rtd_data/bg_raw.geojson
+rtd_data/tracts_raw.geojson
+rtd_data/tracts.geojson.old.geojson
+rtd_data/tracts_bg_backup.geojson
+rtd_data/demographics_bg.json
+rtd_data/demographics.json

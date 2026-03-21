@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RTD Redistricting Explorer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; font-size: 14px; background: #f5f5f5; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+    /* Header */
+    #header { background: #1a3a5c; color: #fff; padding: 10px 16px; display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+    #header h1 { font-size: 16px; font-weight: 600; letter-spacing: .3px; }
+    #header .subtitle { font-size: 12px; opacity: .7; }
+
+    /* Main layout */
+    #main { display: flex; flex: 1; overflow: hidden; }
+
+    /* Sidebar */
+    #sidebar { width: 300px; flex-shrink: 0; background: #fff; border-right: 1px solid #ddd; display: flex; flex-direction: column; overflow: hidden; }
+    #sidebar-inner { overflow-y: auto; padding: 12px; flex: 1; }
+
+    .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: #666; margin: 12px 0 6px; }
+    .section-title:first-child { margin-top: 0; }
+
+    select { width: 100%; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font-size: 13px; }
+    select:disabled { opacity: .5; }
+
+    #map-description { font-size: 12px; color: #555; margin-top: 6px; min-height: 16px; font-style: italic; }
+
+    /* Stats table */
+    #stats-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
+    #stats-table th { background: #f0f0f0; padding: 4px 6px; text-align: left; font-weight: 600; border-bottom: 1px solid #ccc; }
+    #stats-table td { padding: 3px 6px; border-bottom: 1px solid #eee; }
+    #stats-table tr:hover td { background: #fafafa; }
+    .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+    .ok   { color: #2a7a2a; font-weight: 600; }
+    .warn { color: #c07000; font-weight: 600; }
+    .bad  { color: #b00020; font-weight: 600; }
+    .minority-star { color: #8a2be2; font-weight: 700; margin-left: 3px; title: "Minority opportunity district"; }
+
+    /* Summary badges */
+    #summary-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .badge { padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .badge-ok   { background: #d4edda; color: #155724; }
+    .badge-warn { background: #fff3cd; color: #856404; }
+    .badge-bad  { background: #f8d7da; color: #721c24; }
+
+    /* Map container */
+    #map-container { flex: 1; position: relative; }
+    #map { width: 100%; height: 100%; }
+
+    /* Loading overlay */
+    #loading { position: absolute; inset: 0; background: rgba(255,255,255,.85); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1000; gap: 12px; }
+    #loading .spinner { width: 36px; height: 36px; border: 4px solid #ddd; border-top-color: #1a3a5c; border-radius: 50%; animation: spin .8s linear infinite; }
+    #loading .msg { color: #444; font-size: 13px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Comparison panel */
+    #comparison { flex-shrink: 0; background: #fff; border-top: 1px solid #ddd; padding: 10px 14px; }
+    #comparison-header { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+    #comparison-header h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: #555; flex: 1; }
+    #comparison-toggle { font-size: 11px; color: #1a3a5c; }
+    #comparison-body { display: none; margin-top: 8px; }
+    #comparison-body.open { display: flex; gap: 16px; overflow-x: auto; }
+    .cmp-col { flex: 1; min-width: 200px; }
+    .cmp-col h4 { font-size: 12px; font-weight: 600; margin-bottom: 6px; color: #333; }
+    .cmp-col select { margin-bottom: 6px; }
+    .cmp-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .cmp-table th { background: #f0f0f0; padding: 3px 5px; text-align: left; font-weight: 600; border-bottom: 1px solid #ccc; }
+    .cmp-table td { padding: 2px 5px; border-bottom: 1px solid #eee; }
+
+    /* Error message */
+    #error-msg { display: none; padding: 10px 14px; background: #f8d7da; color: #721c24; font-size: 12px; border-top: 1px solid #f5c6cb; }
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <div>
+    <h1>RTD Redistricting Explorer</h1>
+    <div class="subtitle">Regional Transportation District — Colorado</div>
+  </div>
+</div>
+
+<div id="main">
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div id="sidebar-inner">
+
+      <div class="section-title">Static Map</div>
+      <select id="map-select" disabled>
+        <option value="">Loading maps...</option>
+      </select>
+      <div id="map-description"></div>
+
+      <div class="section-title">Summary</div>
+      <div id="summary-badges"><span style="color:#aaa;font-size:12px">No map loaded</span></div>
+
+      <div class="section-title">District Statistics</div>
+      <table id="stats-table">
+        <thead>
+          <tr>
+            <th>District</th>
+            <th>Population</th>
+            <th>Dev.</th>
+            <th>Minority</th>
+            <th>Cont.</th>
+          </tr>
+        </thead>
+        <tbody id="stats-body">
+          <tr><td colspan="5" style="color:#aaa;padding:8px 6px">No map loaded</td></tr>
+        </tbody>
+      </table>
+
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div id="map-container">
+    <div id="map"></div>
+    <div id="loading">
+      <div class="spinner"></div>
+      <div class="msg" id="loading-msg">Loading precinct data...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Comparison panel -->
+<div id="comparison">
+  <div id="comparison-header" onclick="toggleComparison()">
+    <h3>Comparison Panel</h3>
+    <span id="comparison-toggle">Show</span>
+  </div>
+  <div id="comparison-body">
+    <div class="cmp-col" id="cmp-a-col">
+      <h4>Map A</h4>
+      <select id="cmp-a-select" onchange="updateComparison('a')"><option value="">— select —</option></select>
+      <div id="cmp-a-name" style="font-size:11px;color:#555;margin-bottom:4px"></div>
+      <table class="cmp-table"><thead><tr><th>Dist.</th><th>Pop</th><th>Dev.</th><th>Min.%</th><th>Cont.</th></tr></thead>
+        <tbody id="cmp-a-body"><tr><td colspan="5" style="color:#aaa">—</td></tr></tbody>
+      </table>
+    </div>
+    <div class="cmp-col" id="cmp-b-col">
+      <h4>Map B</h4>
+      <select id="cmp-b-select" onchange="updateComparison('b')"><option value="">— select —</option></select>
+      <div id="cmp-b-name" style="font-size:11px;color:#555;margin-bottom:4px"></div>
+      <table class="cmp-table"><thead><tr><th>Dist.</th><th>Pop</th><th>Dev.</th><th>Min.%</th><th>Cont.</th></tr></thead>
+        <tbody id="cmp-b-body"><tr><td colspan="5" style="color:#aaa">—</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="error-msg"></div>
+
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────────
+const COLORS = [
+  '#e41a1c','#377eb8','#4daf4a','#984ea3','#ff7f00',
+  '#a65628','#f781bf','#999999','#66c2a5','#fc8d62',
+  '#8da0cb','#e78ac3','#a6d854','#ffd92f','#b3b3b3'
+];
+const UNALLOCATED_COLOR = '#cccccc';
+const MINORITY_THRESHOLD = 0.45;
+const POP_WARN = 0.05;   // 5% deviation threshold
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let precomputed = null;   // { precincts[], adjacency[] }
+let geojsonData = null;   // raw GeoJSON FeatureCollection
+let geojsonLayer = null;  // Leaflet layer
+let staticMaps   = [];    // index.json entries
+let currentAssignments = null;
+let currentNDistricts  = 0;
+let districtLayer = null;
+let map;
+
+// ── Init Leaflet ──────────────────────────────────────────────────────────────
+map = L.map('map', { zoomControl: true, preferCanvas: true }).setView([39.75, -104.95], 10);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+  maxZoom: 19
+}).addTo(map);
+
+// ── Load data ─────────────────────────────────────────────────────────────────
+async function loadAll() {
+  setLoading('Loading precinct index...');
+  try {
+    const [pcRes, gjRes, idxRes] = await Promise.all([
+      fetch('rtd_data/precomputed.json'),
+      fetch('rtd_data/precincts.geojson'),
+      fetch('static_maps/index.json')
+    ]);
+    if (!pcRes.ok)  throw new Error('Could not load rtd_data/precomputed.json');
+    if (!gjRes.ok)  throw new Error('Could not load rtd_data/precincts.geojson');
+    if (!idxRes.ok) throw new Error('Could not load static_maps/index.json');
+
+    setLoading('Parsing data...');
+    [precomputed, geojsonData, staticMaps] = await Promise.all([
+      pcRes.json(), gjRes.json(), idxRes.json()
+    ]);
+
+    setLoading('Rendering map...');
+    // Small delay so the browser can paint the loading message
+    await new Promise(r => setTimeout(r, 50));
+
+    buildGeojsonLayer();
+    populateDropdowns();
+    hideLoading();
+  } catch (err) {
+    showError(err.message +
+      '\n\nServe this folder with a local HTTP server, e.g.:\n  python3 -m http.server 8080\nthen open http://localhost:8080');
+  }
+}
+
+// ── Build Leaflet GeoJSON layer ───────────────────────────────────────────────
+function buildGeojsonLayer() {
+  // Attach index to each feature for fast lookup
+  geojsonData.features.forEach((f, i) => { f._idx = i; });
+
+  geojsonLayer = L.geoJSON(geojsonData, {
+    style: defaultStyle,
+    onEachFeature: (feature, layer) => {
+      const idx = feature._idx;
+      layer.on('mouseover', () => highlightFeature(layer, idx));
+      layer.on('mouseout',  () => resetHighlight(layer, idx));
+      layer.bindTooltip(() => tooltipContent(idx), { sticky: true, opacity: .9 });
+    }
+  }).addTo(map);
+  map.fitBounds(geojsonLayer.getBounds());
+}
+
+function featureIndex(feature) {
+  // Features are in the same order as precomputed.precincts
+  // We rely on feature index via geojsonData.features.indexOf being slow,
+  // so we attach idx during first pass
+  return feature._idx;
+}
+
+function defaultStyle() {
+  return { weight: .3, color: '#555', opacity: .5, fillOpacity: .65, fillColor: UNALLOCATED_COLOR };
+}
+
+function districtStyle(idx) {
+  if (!currentAssignments) return defaultStyle();
+  const d = currentAssignments[idx];
+  const color = d < 0 ? UNALLOCATED_COLOR : (COLORS[d] || UNALLOCATED_COLOR);
+  return { weight: 1.5, color: color, opacity: 1, fillOpacity: .75, fillColor: color };
+}
+
+function highlightFeature(layer, idx) {
+  const d = currentAssignments ? currentAssignments[idx] : -1;
+  const color = (d < 0) ? UNALLOCATED_COLOR : (COLORS[d] || UNALLOCATED_COLOR);
+  layer.setStyle({ weight: 2, color: '#222', opacity: 1, fillColor: color, fillOpacity: 0.9 });
+  layer.bringToFront();
+}
+
+function resetHighlight(layer, idx) {
+  layer.setStyle(currentAssignments ? { weight: 0, fillOpacity: 0 } : defaultStyle());
+}
+
+function tooltipContent(idx) {
+  if (idx == null || !precomputed) return '';
+  const p = precomputed.precincts[idx];
+  const d = currentAssignments ? currentAssignments[idx] : -1;
+  const distLabel = d < 0 ? 'Unallocated' : `District ${d + 1}`;
+  const minPct = p.pop > 0
+    ? ((p.nh_black + p.hispanic + p.nh_asian) / p.pop * 100).toFixed(1)
+    : '0.0';
+  return `<b>${distLabel}</b><br>
+    GEOID: ${p.geoid}<br>
+    Population: ${p.pop.toLocaleString()}<br>
+    Hispanic: ${(p.pct_hispanic * 100).toFixed(1)}%<br>
+    Black: ${(p.pct_black * 100).toFixed(1)}%<br>
+    Asian: ${(p.pct_asian * 100).toFixed(1)}%<br>
+    Minority: ${minPct}%`;
+}
+
+// ── Populate dropdowns ────────────────────────────────────────────────────────
+function populateDropdowns() {
+  const sel = document.getElementById('map-select');
+  const cmpA = document.getElementById('cmp-a-select');
+  const cmpB = document.getElementById('cmp-b-select');
+
+  sel.innerHTML = '<option value="">— select a map —</option>';
+  cmpA.innerHTML = '<option value="">— select —</option>';
+  cmpB.innerHTML = '<option value="">— select —</option>';
+
+  if (staticMaps.length === 0) {
+    sel.innerHTML = '<option value="">No maps in static_maps/index.json</option>';
+    sel.disabled = true;
+    return;
+  }
+
+  staticMaps.forEach((entry, i) => {
+    const opt = `<option value="${i}">${entry.label}</option>`;
+    sel.insertAdjacentHTML('beforeend', opt);
+    cmpA.insertAdjacentHTML('beforeend', opt);
+    cmpB.insertAdjacentHTML('beforeend', opt);
+  });
+
+  sel.disabled = false;
+  sel.addEventListener('change', () => loadStaticMap(sel.value));
+}
+
+// ── Load a static map file ────────────────────────────────────────────────────
+async function loadStaticMap(idx) {
+  if (idx === '') return;
+  const entry = staticMaps[parseInt(idx)];
+  setLoading(`Loading ${entry.label}...`);
+  try {
+    const res = await fetch(`static_maps/${entry.file}`);
+    if (!res.ok) throw new Error(`Could not load static_maps/${entry.file}`);
+    const data = await res.json();
+    applyMap(data);
+    hideLoading();
+  } catch (err) {
+    hideLoading();
+    showError(err.message);
+  }
+}
+
+function applyMap(data) {
+  currentAssignments = data.assignments;
+  currentNDistricts  = data.nDistricts;
+
+  document.getElementById('map-description').textContent = data.description || '';
+
+  // Make precinct layer invisible — kept only for tooltips/hover
+  geojsonLayer.setStyle(() => ({ weight: 0, fillOpacity: 0 }));
+
+  // Dissolve precincts into per-district polygons (no internal seams)
+  if (districtLayer) { map.removeLayer(districtLayer); districtLayer = null; }
+
+  const fc = {
+    type: 'FeatureCollection',
+    features: geojsonData.features.map((f, i) => ({
+      ...f,
+      properties: { _district: data.assignments[i] }
+    }))
+  };
+  const dissolved = turf.simplify(
+    turf.dissolve(turf.flatten(fc), { propertyName: '_district' }),
+    { tolerance: 0.002, highQuality: false }
+  );
+
+  districtLayer = L.geoJSON(dissolved, {
+    style: (feature) => {
+      const d = feature.properties._district;
+      const color = (d == null || d < 0) ? UNALLOCATED_COLOR : (COLORS[d] || UNALLOCATED_COLOR);
+      return { weight: 0, fillOpacity: 0.75, fillColor: color };
+    }
+  }).addTo(map);
+
+  geojsonLayer.bringToFront();
+  renderStats(data);
+}
+
+// ── Compute statistics ────────────────────────────────────────────────────────
+function computeStats(assignments, nDistricts) {
+  const precincts  = precomputed.precincts;
+  const adjacency  = precomputed.adjacency;
+  const totalPop   = precincts.reduce((s, p) => s + p.pop, 0);
+  const ideal      = totalPop / nDistricts;
+
+  const distPop      = new Array(nDistricts).fill(0);
+  const distMinority = new Array(nDistricts).fill(0);
+
+  precincts.forEach((p, i) => {
+    const d = assignments[i];
+    if (d < 0 || d >= nDistricts) return;
+    distPop[d]      += p.pop;
+    distMinority[d] += p.nh_black + p.hispanic + p.nh_asian;
+  });
+
+  const popDev     = distPop.map(pop => Math.abs(pop - ideal) / ideal);
+  const minPct     = distPop.map((pop, d) => pop > 0 ? distMinority[d] / pop : 0);
+
+  // Contiguity: BFS per district using adjacency list
+  const contiguous = new Array(nDistricts).fill(true);
+  for (let d = 0; d < nDistricts; d++) {
+    const members = [];
+    assignments.forEach((a, i) => { if (a === d) members.push(i); });
+    if (members.length === 0) { contiguous[d] = false; continue; }
+    const visited = new Set();
+    const queue   = [members[0]];
+    while (queue.length > 0) {
+      const node = queue.pop();
+      if (visited.has(node)) continue;
+      visited.add(node);
+      for (const nb of adjacency[node]) {
+        if (assignments[nb] === d && !visited.has(nb)) queue.push(nb);
+      }
+    }
+    contiguous[d] = visited.size === members.length;
+  }
+
+  return { distPop, popDev, minPct, contiguous, totalPop, ideal };
+}
+
+// ── Render stats panel ────────────────────────────────────────────────────────
+function renderStats(data) {
+  const { assignments, nDistricts } = data;
+  const stats = computeStats(assignments, nDistricts);
+
+  // Summary badges
+  const maxDev   = Math.max(...stats.popDev);
+  const allCont  = stats.contiguous.every(Boolean);
+  const hasMinor = stats.minPct.some(p => p >= MINORITY_THRESHOLD);
+  const unalloc  = assignments.filter(a => a < 0).length;
+
+  const badges = document.getElementById('summary-badges');
+  badges.innerHTML = '';
+  const devClass  = maxDev <= POP_WARN ? 'badge-ok' : (maxDev <= .10 ? 'badge-warn' : 'badge-bad');
+  badges.insertAdjacentHTML('beforeend',
+    `<span class="badge ${devClass}">Max dev: ${(maxDev * 100).toFixed(1)}%</span>`);
+  badges.insertAdjacentHTML('beforeend',
+    `<span class="badge ${allCont ? 'badge-ok' : 'badge-bad'}">${allCont ? 'Contiguous' : 'Non-contiguous'}</span>`);
+  badges.insertAdjacentHTML('beforeend',
+    `<span class="badge ${hasMinor ? 'badge-ok' : 'badge-warn'}">${hasMinor ? 'Minority opp.' : 'No minority opp.'}</span>`);
+  if (unalloc > 0)
+    badges.insertAdjacentHTML('beforeend',
+      `<span class="badge badge-warn">${unalloc} unallocated</span>`);
+
+  // Stats table
+  const tbody = document.getElementById('stats-body');
+  tbody.innerHTML = '';
+  for (let d = 0; d < nDistricts; d++) {
+    const color   = COLORS[d] || '#ccc';
+    const devPct  = (stats.popDev[d] * 100).toFixed(1);
+    const devCls  = stats.popDev[d] <= POP_WARN ? 'ok' : (stats.popDev[d] <= .10 ? 'warn' : 'bad');
+    const minPct  = (stats.minPct[d] * 100).toFixed(1);
+    const isMinor = stats.minPct[d] >= MINORITY_THRESHOLD;
+    const contIcon = stats.contiguous[d] ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>';
+    tbody.insertAdjacentHTML('beforeend', `
+      <tr>
+        <td><span class="swatch" style="background:${color}"></span>${d + 1}</td>
+        <td>${stats.distPop[d].toLocaleString()}</td>
+        <td class="${devCls}">${devPct}%</td>
+        <td>${minPct}%${isMinor ? '<span class="minority-star" title="Minority opportunity district">★</span>' : ''}</td>
+        <td>${contIcon}</td>
+      </tr>`);
+  }
+}
+
+// ── Comparison panel ──────────────────────────────────────────────────────────
+let comparisonOpen = false;
+function toggleComparison() {
+  comparisonOpen = !comparisonOpen;
+  document.getElementById('comparison-body').className = comparisonOpen ? 'open' : '';
+  document.getElementById('comparison-toggle').textContent = comparisonOpen ? 'Hide' : 'Show';
+}
+
+const cmpCache = {};
+async function updateComparison(side) {
+  const sel  = document.getElementById(`cmp-${side}-select`);
+  const body = document.getElementById(`cmp-${side}-body`);
+  const name = document.getElementById(`cmp-${side}-name`);
+  const idx  = sel.value;
+  if (idx === '') { body.innerHTML = '<tr><td colspan="5" style="color:#aaa">—</td></tr>'; name.textContent = ''; return; }
+
+  const entry = staticMaps[parseInt(idx)];
+  name.textContent = entry.label;
+
+  let data = cmpCache[entry.file];
+  if (!data) {
+    try {
+      const res = await fetch(`static_maps/${entry.file}`);
+      data = await res.json();
+      cmpCache[entry.file] = data;
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="5" style="color:red">Error loading</td></tr>`;
+      return;
+    }
+  }
+
+  const stats = computeStats(data.assignments, data.nDistricts);
+  body.innerHTML = '';
+  for (let d = 0; d < data.nDistricts; d++) {
+    const devPct = (stats.popDev[d] * 100).toFixed(1);
+    const devCls = stats.popDev[d] <= POP_WARN ? 'ok' : (stats.popDev[d] <= .10 ? 'warn' : 'bad');
+    const minPct = (stats.minPct[d] * 100).toFixed(1);
+    const contIcon = stats.contiguous[d] ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>';
+    const color = COLORS[d] || '#ccc';
+    body.insertAdjacentHTML('beforeend', `
+      <tr>
+        <td><span class="swatch" style="background:${color}"></span>${d + 1}</td>
+        <td>${stats.distPop[d].toLocaleString()}</td>
+        <td class="${devCls}">${devPct}%</td>
+        <td>${minPct}%</td>
+        <td>${contIcon}</td>
+      </tr>`);
+  }
+}
+
+// ── Loading / error helpers ───────────────────────────────────────────────────
+function setLoading(msg) {
+  document.getElementById('loading').style.display = 'flex';
+  document.getElementById('loading-msg').textContent = msg;
+}
+function hideLoading() {
+  document.getElementById('loading').style.display = 'none';
+}
+function showError(msg) {
+  hideLoading();
+  const el = document.getElementById('error-msg');
+  el.style.display = 'block';
+  el.style.whiteSpace = 'pre-wrap';
+  el.textContent = 'Error: ' + msg;
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+// Attach feature indices before layer build
+window.addEventListener('DOMContentLoaded', async () => {
+  await loadAll();
+  // After geojsonData is loaded, indices are attached in buildGeojsonLayer
+});
+</script>
+</body>
+</html>
