@@ -3,7 +3,7 @@
 Build rtd_data/precomputed.json from source GeoJSON files.
 
 Inputs:
-  rtd_data/precincts.geojson       - precinct polygons with ACS demographics
+  rtd_data/precincts.geojson       - precinct polygons with demographics and CVAP (built by build_precincts.py)
   rtd_data/municipalities.geojson  - municipality polygons for muniId assignment
   rtd_data/rtd_boundary.geojson    - RTD service area boundary for clipping
   DirectorDistricts.geojson        - current 15-director district map
@@ -200,24 +200,34 @@ precincts_out = []
 for i, feat in enumerate(features):
     p = feat["properties"]
     precincts_out.append({
-        "idx":          i,
-        "geoid":        str(p.get("GEOID", "")),
-        "countyfp":     str(p.get("COUNTYFP", "")),
-        "x":            round(centroids_x[i], 1),
-        "y":            round(centroids_y[i], 1),
-        "lon":          lons[i],
-        "lat":          lats[i],
-        "pop":          int(p.get("total_pop", 0)),
-        "nh_white":     int(p.get("nh_white", 0)),
-        "nh_black":     int(p.get("nh_black", 0)),
-        "hispanic":     int(p.get("hispanic", 0)),
-        "nh_asian":     int(p.get("nh_asian", 0)),
-        "pct_white":    round(float(p.get("pct_white",    0)), 4),
-        "pct_black":    round(float(p.get("pct_black",    0)), 4),
-        "pct_hispanic": round(float(p.get("pct_hispanic", 0)), 4),
-        "pct_asian":    round(float(p.get("pct_asian",    0)), 4),
-        "muniId":       muni_id_list[i],
-        "hasGeom":      True,
+        "idx":           i,
+        "colo_prec":     str(p.get("colo_prec", "")),
+        "countyfp":      str(p.get("countyfp", "")),
+        "county":        str(p.get("county", "")),
+        "precinct":      str(p.get("precinct", "")),
+        "unique_id":     str(p.get("unique_id", "")),
+        "x":             round(centroids_x[i], 1),
+        "y":             round(centroids_y[i], 1),
+        "lon":           lons[i],
+        "lat":           lats[i],
+        "pop":           int(p.get("total_pop", 0)),
+        "nh_white":      int(p.get("nh_white", 0)),
+        "nh_black":      int(p.get("nh_black", 0)),
+        "hispanic":      int(p.get("hispanic", 0)),
+        "nh_asian":      int(p.get("nh_asian", 0)),
+        "nh_aian":       int(p.get("nh_aian", 0)),
+        "nh_nhpi":       int(p.get("nh_nhpi", 0)),
+        "pct_white":     round(float(p.get("pct_white",    0)), 4),
+        "pct_black":     round(float(p.get("pct_black",    0)), 4),
+        "pct_hispanic":  round(float(p.get("pct_hispanic", 0)), 4),
+        "pct_asian":     round(float(p.get("pct_asian",    0)), 4),
+        "cvap_total":    round(float(p.get("cvap_total",    0)), 2),
+        "cvap_white":    round(float(p.get("cvap_white",    0)), 2),
+        "cvap_black":    round(float(p.get("cvap_black",    0)), 2),
+        "cvap_hispanic": round(float(p.get("cvap_hispanic", 0)), 2),
+        "cvap_asian":    round(float(p.get("cvap_asian",    0)), 2),
+        "muniId":        muni_id_list[i],
+        "hasGeom":       True,
     })
 
 # ── muniGroups and countyGroups ───────────────────────────────────────────────
