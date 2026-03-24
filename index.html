@@ -482,10 +482,17 @@ async function applyMap(data) {
     // edges together and prevent "Unable to complete output ring" errors.
     const flat = turf.flatten(turf.truncate(fc, { precision: 6, coordinates: 2 }));
     const dissolved = turf.dissolve(flat, { propertyName: '_district' });
-    districtBorderLayer = L.geoJSON(dissolved, {
+    // Filter out tiny polygon fragments (small isolated precincts, islands)
+    // to avoid white dots/rings scattered inside districts.
+    const minAreaM2 = 200000; // ~0.2 km²
+    const cleaned = {
+      type: 'FeatureCollection',
+      features: dissolved.features.filter(f => turf.area(f) > minAreaM2)
+    };
+    districtBorderLayer = L.geoJSON(cleaned, {
       pane: 'districtBorderPane',
       renderer: L.svg({ pane: 'districtBorderPane' }),
-      style: { stroke: true, color: '#fff', weight: 3, opacity: 1, fill: false }
+      style: { stroke: true, color: '#fff', weight: 1.5, opacity: 0.9, fill: false }
     }).addTo(mapP);
   } catch (e) {
     console.error('[borders] dissolve failed:', e);
