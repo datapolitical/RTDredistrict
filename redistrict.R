@@ -18,20 +18,41 @@ suppressPackageStartupMessages({
 
 # ── CLI arguments ─────────────────────────────────────────────────────────────
 option_list <- list(
-  make_option("--districts",   type = "integer",   default = NULL,
+  make_option("--districts",            type = "integer",   default = NULL,
               help = "Number of districts, 2–15 [required]"),
-  make_option("--seed",        type = "integer",   default = NULL,
+  make_option("--seed",                 type = "integer",   default = NULL,
               help = "Random seed for reproducibility"),
-  make_option("--name",        type = "character", default = NULL,
+  make_option("--name",                 type = "character", default = NULL,
               help = "Short display name shown in the UI"),
-  make_option("--description", type = "character", default = "",
+  make_option("--description",          type = "character", default = "",
               help = "Longer description shown below the name"),
-  make_option("--burst_size",  type = "integer",   default = 20,
+  make_option("--burst_size",           type = "integer",   default = 20,
               help = "MCMC steps per short burst [default 20]"),
-  make_option("--max_bursts",  type = "integer",   default = 500,
+  make_option("--max_bursts",           type = "integer",   default = 500,
               help = "Number of bursts [default 500; total steps = burst_size x max_bursts]"),
-  make_option("--output",      type = "character", default = NULL,
-              help = "Output file path (default: static_maps/districts_N_SEED.json)")
+  make_option("--output",               type = "character", default = NULL,
+              help = "Output file path (default: static_maps/districts_N_SEED.json)"),
+
+  # ── Improvement flags (all off by default; current algorithm unchanged) ──────
+  # 1. Strict contiguity: reject plans where districts connect only at a corner
+  make_option("--strict_contiguity",    action = "store_true", default = FALSE,
+              help = "Reject plans with corner-only district connections [default FALSE]"),
+  # 2. Tighter population balance
+  make_option("--pop_tol",              type = "double",    default = 0.10,
+              help = "Max population deviation per district [default 0.10]"),
+  # 3. VRA minority-opportunity guarantee (uses CVAP)
+  make_option("--vra_min_pct",          type = "double",    default = NULL,
+              help = "Guarantee ≥1 district above this minority CVAP fraction, e.g. 0.40 [default off]"),
+  make_option("--vra_strength",         type = "double",    default = 2.0,
+              help = "Constraint strength for --vra_min_pct [default 2.0]"),
+  # 5. Group unincorporated precincts by county instead of individually
+  make_option("--group_unincorp",       action = "store_true", default = FALSE,
+              help = "Group unincorporated precincts by county before blocking [default FALSE]"),
+  # 6. Extra compactness constraint and/or alternative scorer
+  make_option("--compactness_strength", type = "double",    default = 0,
+              help = "Add compactness constraint at this strength [default 0 = off]"),
+  make_option("--scorer",               type = "character", default = "pp",
+              help = "Compactness scorer: 'pp' (Polsby-Popper) or 'reock' [default pp]")
 )
 
 opt <- parse_args(OptionParser(
@@ -93,10 +114,27 @@ large_munis <- muni_pops |>
 
 precincts <- precincts |>
   mutate(block_id = case_when(
-    muni_id == "unincorp"      ~ paste0("prec_", prec_idx),  # unincorporated: own precinct block
     muni_id %in% large_munis   ~ paste0("prec_", prec_idx),  # large city: own precinct block
+    muni_id == "unincorp" & opt$group_unincorp
+                               ~ paste0("uninc_", countyfp), # (#5) group by county
+    muni_id == "unincorp"      ~ paste0("prec_", prec_idx),  # unincorporated: own precinct block
     TRUE                       ~ muni_id                      # small/medium city: whole municipality
   ))
+
+# If grouping unincorporated by county, split oversized county groups to precincts
+if (opt$group_unincorp) {
+  uninc_pops <- precincts |>
+    st_drop_geometry() |>
+    filter(startsWith(block_id, "uninc_")) |>
+    group_by(block_id) |>
+    summarize(pop = sum(total_pop), .groups = "drop") |>
+    filter(pop > max_block_pop) |>
+    pull(block_id)
+  if (length(uninc_pops) > 0)
+    precincts <- precincts |>
+      mutate(block_id = ifelse(block_id %in% uninc_pops,
+                               paste0("prec_", prec_idx), block_id))
+}
 
 # ── Split non-contiguous municipality blocks into connected components ─────────
 # Some municipalities have disconnected geometry (enclaves etc.). A MultiPolygon
@@ -132,13 +170,15 @@ for (bid in muni_block_ids) {
 if (n_splits > 0L)
   cat(sprintf("  Split %d municipality block(s) into disconnected components\n", n_splits))
 
-# Dissolve into blocks
+# Dissolve into blocks (aggregate CVAP for VRA constraint if needed)
 blocks <- precincts |>
   group_by(block_id) |>
   summarize(
-    total_pop = sum(total_pop),
-    geometry  = st_union(geometry),
-    .groups   = "drop"
+    total_pop    = sum(total_pop),
+    cvap_total   = sum(cvap_total),
+    cvap_min     = sum(cvap_black + cvap_hispanic + cvap_asian),
+    geometry     = st_union(geometry),
+    .groups      = "drop"
   ) |>
   st_as_sf()
 
@@ -172,30 +212,100 @@ map <- redist_map(blocks,
                   pop_col = "total_pop",
                   adj     = adj_blocks,
                   ndists  = n,
-                  pop_tol = 0.10)
+                  pop_tol = opt$pop_tol)   # (#2) --pop_tol
 
 constr <- redist_constr(map) |>
   add_constr_splits(strength = 1.5, admin = "block_id")
+
+# (#3) VRA minority-opportunity constraint
+if (!is.null(opt$vra_min_pct)) {
+  cat(sprintf("  VRA constraint: ≥1 district ≥%.0f%% minority CVAP (strength=%.1f)\n",
+              opt$vra_min_pct * 100, opt$vra_strength))
+  constr <- constr |>
+    add_constr_vra(nh    = "cvap_min",
+                   total = "cvap_total",
+                   n_vra = 1L,
+                   tgt_vra  = opt$vra_min_pct,
+                   strength = opt$vra_strength)
+}
+
+# (#6) Extra compactness constraint
+if (opt$compactness_strength > 0) {
+  cat(sprintf("  Compactness constraint: strength=%.1f\n", opt$compactness_strength))
+  constr <- constr |>
+    add_constr_compactness(strength = opt$compactness_strength)
+}
 
 # ── Run short-burst optimization (Polsby-Popper on clean block shapes) ────────
 cat(sprintf("Running short-burst optimization for %d districts...\n", n))
 cat(sprintf("  %d bursts x %d steps = %d total steps\n",
             opt$max_bursts, opt$burst_size, opt$max_bursts * opt$burst_size))
 
+# (#6) Scorer selection
+score_fn <- if (opt$scorer == "reock") {
+  cat("  Scorer: Reock\n")
+  scorer_reock(map)
+} else {
+  scorer_polsby_popper(map, m = 1)
+}
+
 plans <- redist_shortburst(
   map,
-  score_fn   = scorer_polsby_popper(map, m = 1),
-  burst_size = opt$burst_size,
-  max_bursts = opt$max_bursts,
-  maximize   = TRUE,
+  score_fn    = score_fn,
+  burst_size  = opt$burst_size,
+  max_bursts  = opt$max_bursts,
+  maximize    = TRUE,
   constraints = constr,
-  verbose    = FALSE
+  verbose     = FALSE
 )
 
 # ── Extract best plan ─────────────────────────────────────────────────────────
 plan_matrix <- get_plans_matrix(plans)
 pp_scores   <- scorer_polsby_popper(map, m = 1)(plan_matrix)
-best_col    <- which.max(pp_scores)
+
+# (#1) Strict contiguity: skip plans where a district connects only at a corner.
+# Uses rook adjacency (snap=1m) at the precinct level to detect corner-only links.
+if (opt$strict_contiguity) {
+  suppressPackageStartupMessages(library(spdep))
+  cat("  Checking strict (edge-only) contiguity...\n")
+  nb_rook <- poly2nb(precincts, queen = FALSE, snap = 1)
+  adj_rook <- lapply(nb_rook, function(x) if (any(x == 0L)) integer(0L) else as.integer(x - 1L))
+
+  is_edge_contiguous <- function(prec_asgn) {
+    for (d in unique(prec_asgn)) {
+      mem <- which(prec_asgn == d)
+      if (length(mem) <= 1L) next
+      visited <- logical(length(mem))
+      queue   <- 1L
+      while (length(queue) > 0L) {
+        cur <- queue[1L]; queue <- queue[-1L]
+        if (visited[cur]) next
+        visited[cur] <- TRUE
+        nbrs_0 <- adj_rook[[mem[cur]]]
+        in_dist <- which(mem %in% (nbrs_0 + 1L))
+        queue   <- c(queue, in_dist[!visited[in_dist]])
+      }
+      if (!all(visited)) return(FALSE)
+    }
+    TRUE
+  }
+
+  best_col <- NA_integer_
+  for (col in order(pp_scores, decreasing = TRUE)) {
+    b_asgn <- as.integer(plan_matrix[, col])
+    p_asgn <- as.integer(setNames(b_asgn, blocks$block_id)[precincts$block_id])
+    if (is_edge_contiguous(p_asgn)) { best_col <- col; break }
+  }
+  if (is.na(best_col)) {
+    warning("No edge-contiguous plan found; falling back to best PP score")
+    best_col <- which.max(pp_scores)
+  } else {
+    cat(sprintf("  Found edge-contiguous plan (rank %d by PP score)\n",
+                which(order(pp_scores, decreasing = TRUE) == best_col)))
+  }
+} else {
+  best_col <- which.max(pp_scores)
+}
 
 block_assignments <- as.integer(plan_matrix[, best_col])   # 1-indexed district per block
 
