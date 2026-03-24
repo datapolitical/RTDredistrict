@@ -197,7 +197,8 @@ let precomputed        = null;
 let staticMaps         = [];
 let currentAssignments = null;
 let currentNDistricts  = 0;
-let districtLayer      = null;   // proposed map dissolved district fills
+let districtLayer      = null;   // proposed map precinct fills
+let districtBorderLayer = null;  // proposed map district outlines (dissolved)
 let geojsonLayerP      = null;   // invisible hover layer on proposed map
 let precinctsGeoJSON   = null;   // precinct FeatureCollection for dissolve
 let muniLayerP         = null;   // municipality layer on proposed map
@@ -207,6 +208,18 @@ let precLayerC         = null;   // precinct overlay on current map
 let topoData           = null;   // loaded TopoJSON (null if not available)
 let rtdBoundary        = null;   // rtd_boundary GeoJSON
 let mapP, mapC;                  // Leaflet map instances
+
+// Start fetching and parsing the large topo file immediately in the background
+// so it's ready (or nearly ready) by the time the user selects a map.
+const topoFetchPromise = fetch('rtd_data/precincts.topo.json')
+  .then(r => r.ok ? r.json() : null)
+  .then(topo => {
+    if (!topo) return null;
+    const geojson = topojson.feature(topo, topo.objects.precincts);
+    geojson.features.forEach((f, i) => { f.properties._idx = i; });
+    return geojson;
+  })
+  .catch(() => null);
 
 // ── Init Leaflet maps ─────────────────────────────────────────────────────────
 const TILE_URL = 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png';
@@ -235,6 +248,12 @@ syncMaps(mapC, mapP);
 async function loadAll() {
   setLoading('Loading data...');
   try {
+    // District fills go in a pane below overlayPane (z-400) so the inverse mask
+    // always covers them — no draw-order juggling needed.
+    mapP.createPane('districtFillPane');
+    mapP.getPane('districtFillPane').style.zIndex = 350;
+    mapC.createPane('districtFillPane');
+    mapC.getPane('districtFillPane').style.zIndex = 350;
     const [pcRes, idxRes, rtdRes, muniRes, dirRes] = await Promise.all([
       fetch('rtd_data/precomputed.json'),
       fetch('static_maps/index.json'),
@@ -253,41 +272,30 @@ async function loadAll() {
     const muniData = muniRes.ok ? await muniRes.json() : null;
     const dirData  = dirRes.ok  ? await dirRes.json()  : null;
 
-    setLoading('Loading precinct boundaries...');
-    await new Promise(r => setTimeout(r, 20));
+    // Build hover layer once topo is ready — fire-and-forget, doesn't block UI.
+    topoFetchPromise.then(geojson => {
+      if (!geojson) return;
+      precinctsGeoJSON = geojson;
+      geojsonLayerP = L.geoJSON(precinctsGeoJSON, {
+        style: { stroke: false, fillOpacity: 0, fillColor: 'transparent' },
+        onEachFeature: (feature, layer) => {
+          const idx = feature.properties._idx;
+          layer.on('mouseover', e => showTooltipAt(layer, idx, e.latlng));
+          layer.on('mouseout',  () => layer.closeTooltip());
+        }
+      }).addTo(mapP);
+    });
 
-    // Load precinct geometry for dissolve (TopoJSON preferred, GeoJSON fallback)
-    const topoRes = await fetch('rtd_data/precincts.topo.json').catch(() => null);
-    if (topoRes && topoRes.ok) {
-      topoData = await topoRes.json();
-      precinctsGeoJSON = topojson.feature(topoData, topoData.objects.precincts);
-    } else {
-      setLoading('Loading precinct GeoJSON...');
-      const pgRes = await fetch('rtd_data/precincts.geojson');
-      if (!pgRes.ok) throw new Error('Could not load precinct geometry');
-      precinctsGeoJSON = await pgRes.json();
-    }
-    // Tag each feature with its index for hover lookup
-    precinctsGeoJSON.features.forEach((f, i) => { f.properties._idx = i; });
-
-    // Invisible hover layer on proposed map
-    geojsonLayerP = L.geoJSON(precinctsGeoJSON, {
-      style: { weight: 0, fillOpacity: 0, fillColor: 'transparent' },
-      onEachFeature: (feature, layer) => {
-        const idx = feature.properties._idx;
-        layer.on('mouseover', e => showTooltipAt(layer, idx, e.latlng));
-        layer.on('mouseout',  () => layer.closeTooltip());
-      }
-    }).addTo(mapP);
-
-    addInverseMask(mapP);
-    addInverseMask(mapC);
-    addRtdOutline(mapP);
-    addRtdOutline(mapC);
+    // Municipality lines must be added before the mask so the mask covers them
+    // outside the RTD boundary. RTD outline goes on top of the mask.
     if (muniData) {
       muniLayerP = buildMuniLayer(muniData).addTo(mapP);
       muniLayerC = buildMuniLayer(muniData).addTo(mapC);
     }
+    addInverseMask(mapP);
+    addInverseMask(mapC);
+    addRtdOutline(mapP);
+    addRtdOutline(mapC);
     if (dirData) buildCurrentDistrictMap(dirData);
     setupPrecinctsToggle();
     setupMuniToggle();
@@ -327,7 +335,7 @@ function rtdUnion() {
 function addInverseMask(map) {
   const mask = turf.mask(rtdUnion());
   L.geoJSON(mask, {
-    style: { weight: 0, fillColor: '#f0ece4', fillOpacity: 0.82 }
+    style: { weight: 0, fillColor: '#f0ece4', fillOpacity: 1 }
   }).addTo(map);
 }
 
@@ -419,8 +427,8 @@ function setupPrecinctsToggle() {
 function setupMuniToggle() {
   document.getElementById('toggle-munis').addEventListener('change', e => {
     if (e.target.checked) {
-      if (muniLayerP) muniLayerP.addTo(mapP);
-      if (muniLayerC) muniLayerC.addTo(mapC);
+      if (muniLayerP) { muniLayerP.addTo(mapP); muniLayerP.bringToBack(); }
+      if (muniLayerC) { muniLayerC.addTo(mapC); muniLayerC.bringToBack(); }
     } else {
       if (muniLayerP) mapP.removeLayer(muniLayerP);
       if (muniLayerC) mapC.removeLayer(muniLayerC);
@@ -429,37 +437,43 @@ function setupMuniToggle() {
 }
 
 // ── Apply static map ──────────────────────────────────────────────────────────
-function applyMap(data) {
+async function applyMap(data) {
   currentAssignments = data.assignments;
   currentNDistricts  = data.nDistricts;
   document.getElementById('map-description').textContent = data.description || '';
 
   if (districtLayer) { mapP.removeLayer(districtLayer); districtLayer = null; }
+  if (districtBorderLayer) { mapP.removeLayer(districtBorderLayer); districtBorderLayer = null; }
 
-  // Tag each precinct feature with its district assignment; skip null geometries
-  const features = [];
-  precinctsGeoJSON.features.forEach((f, i) => {
-    if (f.geometry && f.geometry.type && f.geometry.coordinates) {
-      features.push({ ...f, properties: { _district: data.assignments[i] } });
-    }
-  });
-  const fc = { type: 'FeatureCollection', features };
+  // Wait for topo if it's still in flight (usually already done by the time
+  // the user selects a map, since the fetch started at page load).
+  if (!precinctsGeoJSON) precinctsGeoJSON = await topoFetchPromise;
 
-  const dissolved = turf.simplify(
-    turf.dissolve(turf.flatten(fc), { propertyName: '_district' }),
-    { tolerance: 0.002, highQuality: false }
-  );
-
-  districtLayer = L.geoJSON(dissolved, {
+  // Render each precinct colored by its district assignment.
+  // Stroke color matches fill to seal canvas anti-aliasing gaps between adjacent precincts.
+  // Rendered in districtFillPane (z-350), below overlayPane (z-400) where the mask lives.
+  districtLayer = L.geoJSON(precinctsGeoJSON, {
+    pane: 'districtFillPane',
     style: feature => {
-      const d = feature.properties._district;
+      const d = data.assignments[feature.properties._idx];
       const color = (d == null || d < 0) ? UNALLOCATED_COLOR : (COLORS[d] || UNALLOCATED_COLOR);
-      return { weight: 1.5, color: '#fff', opacity: 0.7, fillOpacity: 0.75, fillColor: color };
+      return { stroke: true, color: color, weight: 2, opacity: 1, fillOpacity: 1, fillColor: color };
     }
   }).addTo(mapP);
 
-  if (geojsonLayerP) geojsonLayerP.bringToFront();
-  if (rtdOutlineP) rtdOutlineP.bringToFront();
+  // Dissolve precincts by district client-side to draw visible border outlines.
+  const tagged = {
+    ...precinctsGeoJSON,
+    features: precinctsGeoJSON.features.map(f => ({
+      ...f,
+      properties: { district: String(data.assignments[f.properties._idx] ?? -1) }
+    }))
+  };
+  const dissolved = turf.dissolve(tagged, { propertyName: 'district' });
+  districtBorderLayer = L.geoJSON(dissolved, {
+    pane: 'districtFillPane',
+    style: { stroke: true, color: '#fff', weight: 2, opacity: 0.8, fill: false }
+  }).addTo(mapP);
 
   renderStats(data);
 }

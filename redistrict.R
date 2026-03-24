@@ -2,10 +2,11 @@
 # Generate an RTD redistricting plan using the redist package.
 # Output: a static map JSON file conforming to STATIC_MAP_SPEC.md
 #
-# Strategy: aggregate precincts into municipal/county blocks first.
-# Small cities become single atomic units (boundaries follow city limits).
-# Only cities too large to fit in one district are left as individual precincts.
-# This produces district boundaries that follow city/county lines by construction.
+# Strategy: aggregate precincts into municipality-level blocks.
+# Small/medium cities become single atomic units (boundaries follow city limits).
+# Cities too large to fit in one district are split to individual precincts.
+# Unincorporated precincts are also kept as individual precinct blocks.
+# This guarantees district boundaries follow actual city limits.
 
 suppressPackageStartupMessages({
   library(optparse)
@@ -71,61 +72,65 @@ centroids <- st_sf(geometry = st_centroid(st_geometry(precincts)))
 muni_join <- st_join(centroids, munis, join = st_within)
 precincts$muni_id <- ifelse(is.na(muni_join$muni_id), "unincorp", muni_join$muni_id)
 
-# ── Build blocks from 2021 House districts ────────────────────────────────────
-# The 65 state House districts were drawn by the Independent Redistricting
-# Commission to follow natural boundaries (roads, city limits, county lines).
-# Using them as atomic units means our RTD district boundaries will snap to
-# the same clean lines the Commission used.
-# House districts too large to fit in one RTD district are split into their
-# constituent municipalities; municipalities too large are split to precincts.
-cat("Building blocks from 2021 House districts...\n")
+# ── Build municipality-level blocks ───────────────────────────────────────────
+# Whole municipalities become single blocks (boundaries follow city limits).
+# Municipalities too large to fit in one district are split to individual precincts.
+# Unincorporated precincts are also kept as individual precinct blocks.
+cat("Building municipality blocks...\n")
 
-house_path <- "2021_Approved_House_Plan_w_Final_Adjustments/2021_Approved_House_Plan_w_Final_Adjustments.shp"
-if (!file.exists(house_path)) stop("House district shapefile not found: ", house_path)
+total_pop     <- sum(precincts$total_pop)
+ideal_pop     <- total_pop / n
+max_block_pop <- ideal_pop
 
-house <- st_read(house_path, quiet = TRUE) |>
-  st_transform(26913) |>
-  transmute(house_dist = as.character(District))
-
-# Assign each precinct to a House district by centroid containment
-house_join <- st_join(centroids, house, join = st_within)
-precincts$house_dist <- ifelse(is.na(house_join$house_dist), "outside", house_join$house_dist)
-
-total_pop <- sum(precincts$total_pop)
-ideal_pop <- total_pop / n
-max_block_pop <- 1.5 * ideal_pop
-
-# Compute population per House district (within RTD)
-house_pops <- precincts |>
-  st_drop_geometry() |>
-  group_by(house_dist) |>
-  summarize(pop = sum(total_pop), .groups = "drop")
-
-large_house <- house_pops |>
-  filter(house_dist != "outside", pop > max_block_pop) |>
-  pull(house_dist)
-
-# For large House districts: fall back to municipality-level sub-blocks
 muni_pops <- precincts |>
   st_drop_geometry() |>
-  filter(house_dist %in% large_house) |>
-  group_by(house_dist, muni_id) |>
+  group_by(muni_id) |>
   summarize(pop = sum(total_pop), .groups = "drop")
 
 large_munis <- muni_pops |>
-  filter(pop > max_block_pop) |>
-  mutate(key = paste0(house_dist, "_", muni_id)) |>
-  pull(key)
+  filter(muni_id != "unincorp", pop > max_block_pop) |>
+  pull(muni_id)
 
 precincts <- precincts |>
-  mutate(hm_key = paste0(house_dist, "_", muni_id),
-         block_id = case_when(
-           house_dist == "outside"            ~ paste0("prec_", prec_idx),  # outside all house districts
-           house_dist %in% large_house &
-             hm_key %in% large_munis          ~ paste0("prec_", prec_idx),  # large city in large house dist
-           house_dist %in% large_house        ~ hm_key,                     # muni block within large house dist
-           TRUE                               ~ house_dist                   # whole house district
-         ))
+  mutate(block_id = case_when(
+    muni_id == "unincorp"      ~ paste0("prec_", prec_idx),  # unincorporated: own precinct block
+    muni_id %in% large_munis   ~ paste0("prec_", prec_idx),  # large city: own precinct block
+    TRUE                       ~ muni_id                      # small/medium city: whole municipality
+  ))
+
+# ── Split non-contiguous municipality blocks into connected components ─────────
+# Some municipalities have disconnected geometry (enclaves etc.). A MultiPolygon
+# block assigned as one unit makes its district non-contiguous. Split each
+# municipality's precincts into connected components using precinct adjacency.
+adj_prec_cc <- redist.adjacency(precincts)
+muni_block_ids <- unique(precincts$block_id[!startsWith(precincts$block_id, "prec_")])
+n_splits <- 0L
+for (bid in muni_block_ids) {
+  rows <- which(precincts$block_id == bid)
+  if (length(rows) <= 1L) next
+  visited <- logical(length(rows))
+  comp    <- integer(length(rows))
+  cid     <- 0L
+  for (k in seq_along(rows)) {
+    if (visited[k]) next
+    cid <- cid + 1L
+    queue <- k
+    while (length(queue) > 0L) {
+      cur <- queue[1L]; queue <- queue[-1L]
+      if (visited[cur]) next
+      visited[cur] <- TRUE; comp[cur] <- cid
+      nbrs <- which(rows %in% (adj_prec_cc[[rows[cur]]] + 1L))
+      queue <- c(queue, nbrs[!visited[nbrs]])
+    }
+  }
+  if (cid > 1L) {
+    n_splits <- n_splits + cid - 1L
+    for (c in seq_len(cid))
+      precincts$block_id[rows[comp == c]] <- paste0(bid, "_cc", c)
+  }
+}
+if (n_splits > 0L)
+  cat(sprintf("  Split %d municipality block(s) into disconnected components\n", n_splits))
 
 # Dissolve into blocks
 blocks <- precincts |>
@@ -137,12 +142,12 @@ blocks <- precincts |>
   ) |>
   st_as_sf()
 
-n_house_blocks <- sum(!house_pops$house_dist[house_pops$house_dist != "outside"] %in% large_house)
-cat(sprintf("  %d blocks total: %d whole House districts, %d split to sub-blocks\n",
-            nrow(blocks), n_house_blocks, length(large_house)))
-if (length(large_house) > 0)
-  cat(sprintf("  Large House districts (split to muni/precinct): %s\n",
-              paste(large_house, collapse = ", ")))
+n_muni_blocks <- sum(!large_munis %in% muni_pops$muni_id[muni_pops$muni_id == "unincorp"])
+cat(sprintf("  %d blocks: %d whole municipalities, %d large municipalities split to precincts\n",
+            nrow(blocks), nrow(blocks) - sum(startsWith(blocks$block_id, "prec_")), length(large_munis)))
+if (length(large_munis) > 0)
+  cat(sprintf("  Large municipalities split to precincts: %s\n",
+              paste(large_munis, collapse = ", ")))
 
 # ── Build adjacency graph for blocks ─────────────────────────────────────────
 cat("Building block adjacency graph...\n")
@@ -169,7 +174,6 @@ map <- redist_map(blocks,
                   ndists  = n,
                   pop_tol = 0.10)
 
-# Only county constraint needed — municipal integrity is now structural
 constr <- redist_constr(map) |>
   add_constr_splits(strength = 1.5, admin = "block_id")
 
@@ -247,7 +251,7 @@ index_path <- file.path("static_maps", "index.json")
 index <- if (file.exists(index_path)) fromJSON(index_path, simplifyDataFrame = FALSE) else list()
 
 entry <- list(file = basename(out_file), label = map_name)
-existing <- which(sapply(index, function(e) e$file == entry$file))
+existing <- which(vapply(index, function(e) identical(e$file, entry$file), logical(1)))
 if (length(existing) > 0) {
   index[[existing[1]]] <- entry
 } else {
