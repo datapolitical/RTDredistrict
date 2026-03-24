@@ -18,10 +18,49 @@ suppressPackageStartupMessages({
 })
 
 # Rook adjacency (shared edges only, no corners) using spdep::poly2nb.
+# snap=100 allows vertices within 100 m to be considered shared — fixes tiny
+# edge gaps from coordinate precision without re-introducing corner adjacency.
 # Returns 0-indexed list matching the format redist expects.
 rook_adj <- function(shp) {
-  nb <- poly2nb(shp, queen = FALSE)
+  nb <- poly2nb(shp, queen = FALSE, snap = 100)
   lapply(nb, function(x) if (any(x == 0L)) integer(0L) else as.integer(x - 1L))
+}
+
+# Connect all disconnected components in an adjacency list via nearest-centroid
+# bridge links. Handles sub-graphs (not just isolated nodes).
+connect_components <- function(adj, coords) {
+  n    <- length(adj)
+  comp <- integer(n)
+  cid  <- 0L
+  for (start in seq_len(n)) {
+    if (comp[start] != 0L) next
+    cid <- cid + 1L
+    queue <- start
+    while (length(queue) > 0L) {
+      cur <- queue[1L]; queue <- queue[-1L]
+      if (comp[cur] != 0L) next
+      comp[cur] <- cid
+      nbrs <- adj[[cur]] + 1L
+      queue <- c(queue, nbrs[comp[nbrs] == 0L])
+    }
+  }
+  if (cid == 1L) return(adj)
+  cat(sprintf("  Connecting %d disconnected sub-graph(s)\n", cid - 1L))
+  while (max(comp) > 1L) {
+    i_nodes <- which(comp == 1L)
+    j_nodes <- which(comp != 1L)
+    best_i <- best_j <- NA_integer_; best_d <- Inf
+    for (i in i_nodes) {
+      dists <- sqrt((coords[j_nodes, 1] - coords[i, 1])^2 +
+                    (coords[j_nodes, 2] - coords[i, 2])^2)
+      idx <- which.min(dists)
+      if (dists[idx] < best_d) { best_d <- dists[idx]; best_i <- i; best_j <- j_nodes[idx] }
+    }
+    adj[[best_i]] <- c(adj[[best_i]], best_j - 1L)
+    adj[[best_j]] <- c(adj[[best_j]], best_i - 1L)
+    comp[comp == comp[best_j]] <- 1L
+  }
+  adj
 }
 
 # ── CLI arguments ─────────────────────────────────────────────────────────────
@@ -161,18 +200,8 @@ if (length(large_munis) > 0)
 cat("Building block adjacency graph...\n")
 adj_blocks <- rook_adj(blocks)
 
-isolated <- which(sapply(adj_blocks, length) == 0)
-if (length(isolated) > 0) {
-  cat(sprintf("  Connecting %d isolated block(s)\n", length(isolated)))
-  coords <- st_coordinates(st_centroid(st_geometry(blocks)))
-  for (i in isolated) {
-    dists    <- sqrt((coords[, 1] - coords[i, 1])^2 + (coords[, 2] - coords[i, 2])^2)
-    dists[i] <- Inf
-    j        <- which.min(dists)
-    adj_blocks[[i]] <- c(adj_blocks[[i]], j - 1L)
-    adj_blocks[[j]] <- c(adj_blocks[[j]], i - 1L)
-  }
-}
+coords_blocks <- st_coordinates(st_centroid(st_geometry(blocks)))
+adj_blocks    <- connect_components(adj_blocks, coords_blocks)
 
 # ── Build redist map and constraints ─────────────────────────────────────────
 cat("Building redist map...\n")
