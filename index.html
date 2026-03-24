@@ -465,26 +465,31 @@ async function applyMap(data) {
     }
   }).addTo(mapP);
 
-  // District border outlines: identify precincts that touch a differently-assigned
-  // neighbor using the precomputed adjacency graph, then stroke only those.
+  // Dissolve precincts into district polygons for clean white border outlines.
+  // Filter null geometries first (TopoJSON edge features can have none).
+  // Simplify after dissolve for performance.
   // Rendered as SVG in districtBorderPane (z-360) — always above the canvas fill
   // layer (z-350) and below the inverse mask (z-400).
-  const adj = precomputed.adjacency;
-  const asgn = data.assignments;
-  const isBoundary = asgn.map((d, i) =>
-    adj[i] && adj[i].some(j => asgn[j] !== d)
-  );
-  const borderFeatures = precinctsGeoJSON.features.filter(
-    f => isBoundary[f.properties._idx]
-  );
-  districtBorderLayer = L.geoJSON(
-    { type: 'FeatureCollection', features: borderFeatures },
-    {
+  try {
+    const features = [];
+    precinctsGeoJSON.features.forEach(f => {
+      if (f.geometry && f.geometry.type && f.geometry.coordinates) {
+        features.push({ ...f, properties: { _district: data.assignments[f.properties._idx] } });
+      }
+    });
+    const fc = { type: 'FeatureCollection', features };
+    const dissolved = turf.simplify(
+      turf.dissolve(turf.flatten(fc), { propertyName: '_district' }),
+      { tolerance: 0.0005, highQuality: false }
+    );
+    districtBorderLayer = L.geoJSON(dissolved, {
       pane: 'districtBorderPane',
       renderer: L.svg({ pane: 'districtBorderPane' }),
       style: { stroke: true, color: '#fff', weight: 2, opacity: 0.85, fill: false }
-    }
-  ).addTo(mapP);
+    }).addTo(mapP);
+  } catch (e) {
+    console.warn('District border dissolve failed:', e);
+  }
 
   renderStats(data);
 }
