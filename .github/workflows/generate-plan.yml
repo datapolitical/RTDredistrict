@@ -51,28 +51,6 @@ jobs:
             --name      "$DISTRICTS Districts ($TIMESTAMP)" \
             --output    "$OUTFILE"
 
-      - name: Update index.json
-        env:
-          OUTFILE:    ${{ steps.plan.outputs.outfile }}
-          DISTRICTS:  ${{ steps.plan.outputs.districts }}
-          TIMESTAMP:  ${{ steps.plan.outputs.timestamp }}
-        run: |
-          python3 - <<'EOF'
-          import json, os
-          outfile   = os.environ["OUTFILE"]
-          districts = os.environ["DISTRICTS"]
-          timestamp = os.environ["TIMESTAMP"]
-          label     = f"{districts} Districts ({timestamp})"
-          filename  = os.path.basename(outfile)
-          path      = "static_maps/index.json"
-          with open(path) as f:
-              index = json.load(f)
-          index.append({"file": filename, "label": label})
-          with open(path, "w") as f:
-              json.dump(index, f, indent=2)
-              f.write("\n")
-          EOF
-
       - name: Commit and push
         run: |
           git config user.name  "github-actions[bot]"
