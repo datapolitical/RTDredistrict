@@ -477,18 +477,16 @@ async function applyMap(data) {
         features.push({ ...f, properties: { _district: data.assignments[f.properties._idx] } });
       }
     });
-    console.log('[borders] input features:', features.length);
     const fc = { type: 'FeatureCollection', features };
-    const flat = turf.flatten(turf.rewind(fc, { reverse: false, mutate: false }));
-    console.log('[borders] after flatten:', flat.features.length);
+    // Truncate coordinates to 6 decimal places (~0.1m) to snap near-touching
+    // edges together and prevent "Unable to complete output ring" errors.
+    const flat = turf.flatten(turf.truncate(fc, { precision: 6, coordinates: 2 }));
     const dissolved = turf.dissolve(flat, { propertyName: '_district' });
-    console.log('[borders] after dissolve:', dissolved.features.length, dissolved.features.map(f => f.properties._district));
     districtBorderLayer = L.geoJSON(dissolved, {
       pane: 'districtBorderPane',
       renderer: L.svg({ pane: 'districtBorderPane' }),
       style: { stroke: true, color: '#fff', weight: 3, opacity: 1, fill: false }
     }).addTo(mapP);
-    console.log('[borders] layer added to map');
   } catch (e) {
     console.error('[borders] dissolve failed:', e);
   }
