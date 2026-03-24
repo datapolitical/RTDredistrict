@@ -102,7 +102,7 @@ precincts <- precincts |>
 # Some municipalities have disconnected geometry (enclaves etc.). A MultiPolygon
 # block assigned as one unit makes its district non-contiguous. Split each
 # municipality's precincts into connected components using precinct adjacency.
-adj_prec_cc <- redist.adjacency(precincts)
+adj_prec_cc <- redist.adjacency(precincts, queen = FALSE)
 muni_block_ids <- unique(precincts$block_id[!startsWith(precincts$block_id, "prec_")])
 n_splits <- 0L
 for (bid in muni_block_ids) {
@@ -151,7 +151,7 @@ if (length(large_munis) > 0)
 
 # ── Build adjacency graph for blocks ─────────────────────────────────────────
 cat("Building block adjacency graph...\n")
-adj_blocks <- redist.adjacency(blocks)
+adj_blocks <- redist.adjacency(blocks, queen = FALSE)
 
 isolated <- which(sapply(adj_blocks, length) == 0)
 if (length(isolated) > 0) {
@@ -209,7 +209,7 @@ dist_pop <- as.numeric(tapply(precincts$total_pop, precinct_district, sum))
 max_dev  <- max(abs(dist_pop - ideal_pop) / ideal_pop)
 
 # Cut edges at the precinct level (what the browser uses for contiguity)
-adj_prec <- redist.adjacency(precincts)
+adj_prec <- redist.adjacency(precincts, queen = FALSE)
 isolated_p <- which(sapply(adj_prec, length) == 0)
 if (length(isolated_p) > 0) {
   coords_p <- st_coordinates(st_centroid(st_geometry(precincts)))
