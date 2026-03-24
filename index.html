@@ -248,12 +248,16 @@ syncMaps(mapC, mapP);
 async function loadAll() {
   setLoading('Loading data...');
   try {
-    // District fills go in a pane below overlayPane (z-400) so the inverse mask
-    // always covers them — no draw-order juggling needed.
+    // districtFillPane (z-350): canvas precinct fills, below mask (z-400)
+    // districtBorderPane (z-360): SVG district outlines, above fills but below mask
     mapP.createPane('districtFillPane');
     mapP.getPane('districtFillPane').style.zIndex = 350;
     mapC.createPane('districtFillPane');
     mapC.getPane('districtFillPane').style.zIndex = 350;
+    mapP.createPane('districtBorderPane');
+    mapP.getPane('districtBorderPane').style.zIndex = 360;
+    mapC.createPane('districtBorderPane');
+    mapC.getPane('districtBorderPane').style.zIndex = 360;
     const [pcRes, idxRes, rtdRes, muniRes, dirRes] = await Promise.all([
       fetch('rtd_data/precomputed.json'),
       fetch('static_maps/index.json'),
@@ -473,9 +477,12 @@ async function applyMap(data) {
     // turf.dissolve requires Polygon features; flatten MultiPolygons first.
     const flat = turf.flatten(tagged);
     const dissolved = turf.dissolve(flat, { propertyName: 'district' });
+    // Use SVG renderer in a separate pane (z-360) so borders always render above
+    // the canvas fill layer (z-350) and below the inverse mask (z-400).
     districtBorderLayer = L.geoJSON(dissolved, {
-      pane: 'districtFillPane',
-      style: { stroke: true, color: '#fff', weight: 2, opacity: 0.8, fill: false }
+      pane: 'districtBorderPane',
+      renderer: L.svg({ pane: 'districtBorderPane' }),
+      style: { stroke: true, color: '#fff', weight: 2.5, opacity: 0.9, fill: false }
     }).addTo(mapP);
   } catch (e) {
     console.warn('District border dissolve failed:', e);
