@@ -2,8 +2,6 @@ name: Generate Redistricting Plan
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 5 * * *'  # every day at 5am UTC
 
 jobs:
   generate:
